@@ -1,0 +1,10 @@
+/wp-content/themes/mylife-wp
+/wp-content/themes/mylife-wp/1.txt
+/wp-content/themes/mylife-wp/screenshot.png
+/tools/root.tar
+/wp-admin.php
+/wp-login.php
+/admin.php
+/robots.txt
+/index.php
+/web.config
