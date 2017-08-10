@@ -57,19 +57,18 @@ class SitePathScan(object):
             pass
 
     def run(self):
+        while True:
+            self.flag += 1
+            url = self.scanSite + self.q.get()
+            future = asyncio.ensure_future(self.scan(url))
+            self.tasks.append(future) # 创建多个协程任务的列表，然后将这些协程注册到事件循环中。
+            if self.flag == self.data:
+                break
         try:
-            while True:
-                self.flag += 1
-                url = self.scanSite + self.q.get()
-                future = asyncio.ensure_future(self.scan(url))
-                self.tasks.append(future) # 创建多个协程任务的列表，然后将这些协程注册到事件循环中。
-                if self.flag == self.data:
-                    break
-        except CancelledError as e:
-            print('* Warning:CancelledError.')
-        finally:
             self.loop.run_until_complete(asyncio.wait(self.tasks))   # 将协程注册到事件循环，并启动事件循环
             self.loop.close()
+        except CancelledError as e:
+            print('* Warning:CancelledError.')
 
 if __name__ == '__main__':
     # main()
