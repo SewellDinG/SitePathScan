@@ -1,88 +1,75 @@
 #! /usr/bin/python
 # -*- coding:utf-8 -*-
 
-import time
-import Queue
-import urllib2
-import requests
+import queue
+import asyncio
 import argparse
-import threading
+from aiohttp import ClientSession
 
 class SitePathScan(object):
-    def __init__(self, scanSite, scanDict, scanOutput,threadNum):
-        print '* SitePathScan ready to start.'
+    def __init__(self, scanSite, scanDict, scanOutput,coroutineNum):
+        print('* SitePathScan ready to start.')
         self.scanSite = scanSite if scanSite.find('://') != -1 else 'http://%s' % scanSite
-        print '* Current target:',self.scanSite
+        print('* Current target:',self.scanSite)
         self.scanDict = scanDict
         self.scanOutput = scanSite.rstrip('/').replace('https://', '').replace('http://', '').replace('.', '_')+'.txt' if scanOutput == 0 else scanOutput
         self.loadDict(self.scanDict)
-        self.threadNum = threadNum
-        # Prepare threading lock
-        self.lock = threading.Lock()
+        self.coroutineNum = coroutineNum
+        self.loop = asyncio.get_event_loop()  # 创建一个事件循环
+        self.sema = asyncio.Semaphore(self.coroutineNum)
+        self.tasks = []
+        self.flag = 0
 
     def loadDict(self, dict_list):
-        self.q = Queue.Queue()
+        self.q = queue.Queue()
         with open(dict_list) as f:
             for line in f:
                 self.q.put(line.strip())
-        self.date = self.q.qsize()
-        if self.date > 0:
-            print '* Total Dictionary:',self.date
+        self.data = self.q.qsize()
+        if self.data > 0:
+            print('* Total Dictionary:',self.data)
         else:
-            print '* NO default.txt'
+            print('* NO default.txt')
             quit()
 
     def writeOutput(self, result):
-        # Play threading lock
-        self.lock.acquire()
         with open(self.scanOutput, 'a') as f:
             f.write(result + '\n')
-        self.lock.release()
 
-    def scan(self, url):
-        html_result = 0
-        status_code = [200]
-        status_text = ['Forbidden','Internal Server Error']
+    async def scan(self, url):
         headers = {
-            'Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'User-Agent':'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_6) AppleWebKit/603.3.8 (KHTML, like Gecko) Version/10.1.2 Safari/603.3.8',
-            'Referer':'https://www.baidu.com',
-            'Accept-Encoding':'gzip, deflate',
-            'Connection':'keep-alive',
-        }
-        # urllib2 - head()
+                'Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'User-Agent':'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_6) AppleWebKit/603.3.8 (KHTML, like Gecko) Version/10.1.2 Safari/603.3.8',
+                'Referer':'https://www.baidu.com',
+                'Accept-Encoding':'gzip, deflate',
+                'Connection':'keep-alive',
+            }
         try:
-            req = urllib2.Request(url,headers=headers)
-            html_result = urllib2.urlopen(req)
-            # print html_result.code   # 状态码，headers头
-            if html_result.code in status_code:
-                print '[ %i ] %s' % (html_result.code, html_result.url)
-                self.writeOutput('[ %i ] %s' % (html_result.code, html_result.url))
-            # 分析文件的大小，利用于扫描压缩文件
-            # meta = html_result.info()
-            # file_size = int(meta.getheaders("Content-Length")[0])
-            # print file_size
-        except urllib2.URLError, e:
-            # print e.reason # 403-'Forbidden',500-'Internal Server Error'
-            if e.reason in status_text:
-                print '[ Forbidden ] %s' % url
-                self.writeOutput('[ Forbidden ] %s' % url)
-        # # requests - get()
-        # try:
-        #     html_result = requests.get(url, headers=headers, timeout=3)
-        #     # print html_result.url
-        # except requests.exceptions.ConnectTimeout:
-        #     print 'The request timed out.'
-        # finally:
-        #     if html_result.status_code in status_code:
-        #         print '[ %i ] %s' % (html_result.status_code, html_result.url)
-        #         self.writeOutput('[ %i ] %s' % (html_result.status_code, html_result.url))
+            async with self.sema:
+                async with ClientSession() as session:
+                    async with session.head(url, headers=headers,timeout=10) as resp:
+                        code = resp.status
+                        if code == 200 or code == 301 or code == 403:
+                            print('[ %i ] %s' % (code, url))
+                            self.writeOutput('[ %i ] %s' % (code, url))
+        except Exception as e:
+            # print(e)
+            pass
 
     def run(self):
-        # run to q.empty() == flase ,so q have things
-        if not self.q.empty():
-            url = self.scanSite + self.q.get()
-            self.scan(url)
+        try:
+            while True:
+                self.flag += 1
+                url = self.scanSite + self.q.get()
+                future = asyncio.ensure_future(self.scan(url))
+                self.tasks.append(future) # 创建多个协程任务的列表，然后将这些协程注册到事件循环中。
+                if self.flag == self.data:
+                    break
+        except CancelledError as e:
+            print('* Warning:CancelledError.')
+        finally:
+            self.loop.run_until_complete(asyncio.wait(self.tasks))   # 将协程注册到事件循环，并启动事件循环
+            self.loop.close()
 
 if __name__ == '__main__':
     # main()
@@ -93,34 +80,16 @@ if __name__ == '__main__':
      ___) | | ||  __/  __/ (_| | |_| | | |___) | (_| (_| | | | |
     |____/|_|\__\___|_|   \__,_|\__|_| |_|____/ \___\__,_|_| |_|
     '''
-    print banner
-    parser = argparse.ArgumentParser(description="This script uses the urllib library's head() method to determine the status word and error status。")
+    print(banner)
+    parser = argparse.ArgumentParser(description="This script uses the aiohttp library's head() method to determine the status word.")
     # 位置参数
     parser.add_argument("website", type=str, help="The website that needs to be scanned")
     # 可选参数
     parser.add_argument('-d', '--dict', dest="scanDict", help="Dictionary for scanning", type=str, default="dict/default.txt")
     parser.add_argument('-o', '--output', dest="scanOutput", help="Results saved files", type=str, default=0)
-    parser.add_argument('-t', '--thread', dest="threadNum", help="Number of threads running the program", type=int, default=50)
+    parser.add_argument('-t', '--thread', dest="coroutineNum", help="Number of coroutine running the program", type=int, default=50)
     args = parser.parse_args()
-    scan = SitePathScan(args.website, args.scanDict, args.scanOutput, args.threadNum)
+    scan = SitePathScan(args.website, args.scanDict, args.scanOutput, args.coroutineNum)
     # print 'Scan Start!!!'
-    def thread():
-        for i in range(args.threadNum):
-            t = threading.Thread(target=scan.run)
-            t.setDaemon(True)
-            t.start()
-            # t.join() # no
-
-    while True:
-        if  scan.q.empty() == True and threading.activeCount() <= 1 :
-            break
-        if threading.activeCount() <= 1:
-            thread()
-        else:
-            try:
-                # flush
-                time.sleep(0.1)
-            except KeyboardInterrupt, e:
-                print '[ WARNING ] User aborted, wait all slave threads to exit, current(%i)' % threading.activeCount()
-
-    print "* End of scan."
+    scan.run()
+    print("* End of scan.")
